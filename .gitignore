@@ -4,7 +4,4 @@
 *.obj
 
 # 실행 파일
-CHATBOT
-
-# vscode devcontainer 관련
-.vscode/
+chatBot

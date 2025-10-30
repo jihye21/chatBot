@@ -9,34 +9,26 @@ int main(){
     std::vector<std::vector<int>> tokenized;
     for(auto &s: corpus) tokenized.push_back(tokenize(s));
 
-    GPUMiniGPT model(16,32,2,idx2word.size());
+    CPUMiniGPT model(16,32,2,idx2word.size());
     float lr=0.01f;
 
-    for(int epoch=0; epoch<100; epoch++){
+    for(int epoch=0; epoch<10; epoch++){
         for(auto &tokens: tokenized){
-            GPUTensor x(tokens.size(),16);
-            GPUTensor logits = model.forward(x);
+            CPUTensor x(tokens.size(),16);
+            CPUTensor logits = model.forward(x);
 
-            int* d_targets;
-            cudaMalloc(&d_targets,sizeof(int)*tokens.size());
-            cudaMemcpy(d_targets,tokens.data(),sizeof(int)*tokens.size(),cudaMemcpyHostToDevice);
+            std::vector<float> grad_logits;
+            cross_entropy_backward_cpu(logits.data,tokens,grad_logits,logits.rows,logits.cols);
 
-            GPUTensor grad_logits(logits.rows, logits.cols);
-            cross_entropy_backward(logits.data,d_targets,grad_logits.data,logits.rows,logits.cols);
-
-            model.Wout.backward(grad_logits,lr);
-            for(auto &blk: model.blocks){
-                blk.W1.backward(grad_logits,lr);
-                blk.W2.backward(grad_logits,lr);
-            }
-
-            cudaFree(d_targets);
+            CPUTensor grad_tensor(logits.rows, logits.cols);
+            grad_tensor.data=grad_logits;
+            model.Wout.backward(grad_tensor, lr);
         }
-        if(epoch%10==0) std::cout<<"Epoch "<<epoch<<" done"<<std::endl;
+        std::cout<<"Epoch "<<epoch<<" done"<<std::endl;
     }
 
     std::vector<int> seed = tokenize("hello");
-    std::vector<int> gen = generate_text_gpu(model,seed,5);
+    std::vector<int> gen = generate_text_cpu(model, seed,5);
     for(int idx: gen) std::cout<<idx2word[idx]<<" ";
     std::cout<<std::endl;
 }

@@ -1,11 +1,13 @@
 #pragma once
-#include <cuda_runtime.h>
+#include <vector>
 
-struct GPUTensor {
-    float* data;
+struct CPUTensor {
+    std::vector<float> data;
     int rows, cols;
-    GPUTensor(int r,int c): rows(r), cols(c){
-        cudaMalloc(&data,sizeof(float)*r*c);
-    }
-    ~GPUTensor(){ cudaFree(data); }
+
+    // 기본 생성자
+    CPUTensor(): rows(0), cols(0), data() {}
+
+    // 기존 생성자
+    CPUTensor(int r,int c): rows(r), cols(c), data(r*c,0.0f) {}
 };
