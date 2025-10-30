@@ -65,9 +65,7 @@ int main(){
 
     // Training loop
     for(int epoch=0; epoch<epochs; epoch++){
-
-        int sample_idx = 0;
-
+        
         for(auto &tokens: tokenized){
 
             CPUTensor x = embed.forward(tokens);
@@ -79,8 +77,6 @@ int main(){
             CPUTensor grad_tensor(logits.rows, logits.cols);
             grad_tensor.data = grad_logits;
             model.backward(grad_tensor, lr);
-
-            sample_idx++;
         }
         std::cout << "Epoch " << epoch << " done\n";
     }
