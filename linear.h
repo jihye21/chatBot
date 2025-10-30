@@ -2,11 +2,14 @@
 #include "tensor.h"
 #include <vector>
 #include <cstdlib>
+#include <fstream>
 
 struct CPULinear {
     CPUTensor W,b;
     int in_dim,out_dim;
     CPUTensor x_cache;
+
+    CPULinear(): W(0,0), b(0,0), in_dim(0), out_dim(0) {}
 
     CPULinear(int in_dim,int out_dim): W(in_dim,out_dim), b(1,out_dim), in_dim(in_dim), out_dim(out_dim){
         for(auto &v: W.data) v=((float)rand()/RAND_MAX-0.5f)*0.02f;
@@ -37,5 +40,15 @@ struct CPULinear {
             }
         }
         return dX;
+    }
+
+    void save(std::ofstream &fout){
+        fout.write((char*)W.data.data(), W.data.size()*sizeof(float));
+        fout.write((char*)b.data.data(), b.data.size()*sizeof(float));
+    }
+
+    void load(std::ifstream &fin){
+        fin.read((char*)W.data.data(), W.data.size()*sizeof(float));
+        fin.read((char*)b.data.data(), b.data.size()*sizeof(float));
     }
 };
