@@ -58,7 +58,6 @@ void load_all_corpus_from_folder(const std::string &folder_path) {
             std::cout << "Loaded " << entry.path().filename() << std::endl;
         }
     }
-    std::cout << "Total corpus size: " << corpus.size() << std::endl;
 }
 
 void build_vocab(const std::vector<std::string> &corpus){
@@ -71,7 +70,7 @@ void build_vocab(const std::vector<std::string> &corpus){
 
     word2idx["<PAD>"] = idx++;
     idx2word.push_back("<PAD>");
-    
+
     for(auto &sentence: corpus){
         std::string clean;
         for(char c: sentence){

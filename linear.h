@@ -3,6 +3,7 @@
 #include <vector>
 #include <cstdlib>
 #include <fstream>
+#include <cmath>
 
 struct CPULinear {
     CPUTensor W,b;
@@ -12,6 +13,7 @@ struct CPULinear {
     CPULinear(): W(0,0), b(0,0), in_dim(0), out_dim(0) {}
 
     CPULinear(int in_dim,int out_dim): W(in_dim,out_dim), b(1,out_dim), in_dim(in_dim), out_dim(out_dim){
+        float bound = std::sqrt(6.0f / (in_dim + out_dim));
         for(auto &v: W.data) v=((float)rand()/RAND_MAX-0.5f)*0.02f;
         for(auto &v: b.data) v=0.0f;
     }
@@ -31,14 +33,34 @@ struct CPULinear {
 
     CPUTensor backward(const CPUTensor& grad_out, float lr){
         CPUTensor dX(x_cache.rows, x_cache.cols);
-        for(int i=0;i<in_dim;i++){
-            for(int j=0;j<out_dim;j++){
-                float grad=0;
-                for(int n=0;n<x_cache.rows;n++)
-                    grad += x_cache.data[n*in_dim+i]*grad_out.data[n*out_dim+j];
-                W.data[i*out_dim+j] -= lr*grad;
+        for(int n=0;n<x_cache.rows;n++){
+            for(int i=0;i<in_dim;i++){
+                float sum = 0.0f;
+                for(int j=0;j<out_dim;j++){
+                    sum += grad_out.data[n*out_dim+j]*W.data[i*out_dim+j];
+                }
+                dX.data[n*in_dim+i] = sum;
             }
         }
+
+        for(int i=0; i<in_dim; i++){
+            for(int j=0; j<out_dim; j++){
+                float grad = 0.0f;
+                for(int n=0; n<x_cache.rows; n++){
+                    grad += x_cache.data[n*in_dim + i] * grad_out.data[n*out_dim + j];
+                }
+                W.data[i*out_dim + j] -= lr * grad;
+            }
+        }
+
+        for(int j=0; j<out_dim; j++){
+            float grad = 0.0f;
+            for(int n=0; n<x_cache.rows; n++){
+                grad += grad_out.data[n*out_dim + j];
+            }
+            b.data[j] -= lr * grad;
+        }
+        
         return dX;
     }
 
