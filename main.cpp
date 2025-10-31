@@ -11,49 +11,209 @@
 #include <ctime>
 #include <cmath>
 
-float compute_step_loss(const std::vector<float>& logits, const std::vector<int>& target_seq,
-                        int rows, int cols, int pad_token_id) {   
-    float step_loss = 0.0f;
-    int valid_count = 0;
-    for(int i = 0; i < rows; i++){
-        if(target_seq[i] == pad_token_id) continue;
+std::random_device rd;
+std::mt19937 gen(rd());
+std::uniform_real_distribution<float> dis(0.0f, 1.0f);
+
+float compute_step_loss(const std::vector<float>& logits, const std::vector<int>& targets,
+                        int rows, int cols, int pad_token_id){
+    float loss = 0.0f;
+    int count = 0;
+    for(int i=0;i<rows;i++){
+        if(targets[i]==pad_token_id) continue;
+        float max_logit = -1e20f;
+        for(int j=0;j<cols;j++) if(logits[i*cols+j] > max_logit) max_logit = logits[i*cols+j];
+
         float sum_exp = 0.0f;
-        for(int j = 0; j < cols; j++) sum_exp += std::exp(logits[i*cols + j]);
-        float p = std::exp(logits[i*cols + target_seq[i]]) / sum_exp;
-        step_loss -= std::log(p + 1e-8f);
-        valid_count++;
+        for(int j=0;j<cols;j++) sum_exp += std::exp(logits[i*cols+j] - max_logit);
+
+        float log_p = logits[i*cols + targets[i]] - max_logit - std::log(sum_exp + 1e-8f);
+        loss -= log_p;
+        count++;
     }
-    if(valid_count > 0) step_loss /= valid_count;
-    return step_loss;
+    if(count>0) loss /= count;
+    return loss;
 }
 
 void xavier_init(std::vector<float>& weights, int in_dim, int out_dim){
     float bound = std::sqrt(6.0f / (in_dim + out_dim));
-    for(auto &w: weights) w = ((float)rand()/RAND_MAX) * 2 * bound - bound;
+    for(auto &v: weights) v = ((float)rand()/RAND_MAX*2 - 1) * bound;
 }
 
-std::vector<int> generate_response(const std::vector<int>& seed, CPUMiniGPT &model, Embedding &embed,
-                                   int max_len=20, int top_k=10, float temperature=0.8f, int pad_token_id=-1) {
-    std::vector<int> output_tokens = seed;
+int sample_from_top_p(const std::vector<float>& logits, float temperature, float top_p) {
+    std::vector<float> probs(logits.size());
+    float max_logit = *std::max_element(logits.begin(), logits.end());
+    float sum_exp = 0.0f;
+    for (size_t i = 0; i < logits.size(); ++i) {
+        probs[i] = std::exp((logits[i] - max_logit) / temperature);
+        sum_exp += probs[i];
+    }
+    for (auto& p : probs) p /= sum_exp;
 
-    for(int t=0; t<max_len; t++){
+    std::vector<int> indices(probs.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    std::sort(indices.begin(), indices.end(),
+              [&](int a, int b){ return probs[a] > probs[b]; });
+
+    float cumulative = 0.0f;
+    std::vector<int> candidates;
+    for (int idx : indices) {
+        cumulative += probs[idx];
+        candidates.push_back(idx);
+        if (cumulative >= top_p) break;
+    }
+
+    float subset_sum = 0.0f;
+    for (int idx : candidates) subset_sum += probs[idx];
+    for (int idx : candidates) probs[idx] /= subset_sum;
+
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    float r = dist(gen);
+    float accum = 0.0f;
+    for (int idx : candidates) {
+        accum += probs[idx];
+        if (r <= accum) return idx;
+    }
+    return candidates.back();
+}
+
+int sample_topk_top_p_temperature(std::vector<float>& logits, int top_k, float top_p, float temperature) {
+    int vocab_size = (int)logits.size();
+
+    for(int i=0;i<vocab_size;i++) logits[i] /= temperature;
+
+    std::vector<int> top_indices(vocab_size);
+    std::iota(top_indices.begin(), top_indices.end(), 0);
+    std::sort(top_indices.begin(), top_indices.end(), [&logits](int a, int b){ return logits[a] > logits[b]; });
+
+    if(top_k > 0 && top_k < vocab_size) top_indices.resize(top_k);
+
+    std::vector<float> exp_logits;
+    float max_logit = -1e20f;
+    for(int idx: top_indices) if(logits[idx] > max_logit) max_logit = logits[idx];
+
+    for(int idx: top_indices) exp_logits.push_back(std::exp(logits[idx]-max_logit));
+
+    float sum_exp = std::accumulate(exp_logits.begin(), exp_logits.end(), 0.0f);
+
+    if(top_p < 1.0f) {
+        std::vector<std::pair<int,float>> prob_pairs;
+        for(size_t i=0;i<top_indices.size();i++) prob_pairs.emplace_back(top_indices[i], exp_logits[i]/sum_exp);
+        std::sort(prob_pairs.begin(), prob_pairs.end(), [](auto &a, auto &b){ return a.second > b.second; });
+
+        float cum_prob = 0.0f;
+        std::vector<int> filtered_indices;
+        std::vector<float> filtered_probs;
+        for(auto &p : prob_pairs){
+            cum_prob += p.second;
+            filtered_indices.push_back(p.first);
+            filtered_probs.push_back(p.second);
+            if(cum_prob >= top_p) break;
+        }
+        top_indices = filtered_indices;
+        exp_logits = filtered_probs;
+        sum_exp = std::accumulate(exp_logits.begin(), exp_logits.end(), 0.0f);
+    }
+
+    for(auto &v : exp_logits) v /= sum_exp;
+
+    float r = dis(gen);
+    float accum = 0.0f;
+    for(size_t i=0;i<exp_logits.size();i++){
+        accum += exp_logits[i];
+        if(r <= accum) return top_indices[i];
+    }
+
+    return top_indices.back();
+}
+
+std::vector<int> generate_response_context(
+    const std::vector<int>& seed,
+    CPUMiniGPT &model,
+    Embedding &embed,
+    int max_len = 60,
+    int top_k = 15,
+    float temperature = 0.74f,
+    float top_p = 0.92f,
+    float repetition_penalty = 1.4f,
+    int pad_token_id = -1,
+    int eos_token_id = -1,
+    bool debug = false
+) {
+    std::vector<int> output_tokens = seed;
+    std::vector<int> recent_tokens = seed;
+
+    for (int t = 0; t < max_len; t++) {
         CPUTensor x = embed.forward(output_tokens);
-        if(x.data.empty()) break;
+        if (x.data.empty()) break;
 
         CPUTensor logits = model.forward(x);
-        if(logits.data.empty()) break;
+        if (logits.data.empty()) break;
 
         int vocab_size = logits.cols;
         std::vector<float> last_logits(logits.data.begin(), logits.data.begin() + vocab_size);
 
-        if(pad_token_id >= 0 && pad_token_id < vocab_size)
+        if (pad_token_id >= 0 && pad_token_id < vocab_size)
             last_logits[pad_token_id] = -1e6f;
 
-        int next_token = sample_topk_temperature(last_logits, top_k, temperature);
-        if(next_token < 0 || next_token >= (int)idx2word.size())
+        for (int token : recent_tokens) {
+            if (token >= 0 && token < vocab_size)
+                last_logits[token] /= repetition_penalty;
+        }
+
+        int next_token = sample_topk_top_p_temperature(last_logits, top_k, top_p, temperature);
+
+        if (next_token == eos_token_id) break;
+
+        output_tokens.push_back(next_token);
+        recent_tokens.push_back(next_token);
+        if (recent_tokens.size() > 60) recent_tokens.erase(recent_tokens.begin());
+
+        if (debug) {
+            std::cout << "Step " << t << ": next_token=" << next_token
+                      << " (" << idx2word[next_token] << ")\n";
+        }
+    }
+
+    return std::vector<int>(output_tokens.begin() + seed.size(), output_tokens.end());
+}
+
+std::vector<int> generate_response(const std::vector<int>& seed,
+                                   CPUMiniGPT &model, Embedding &embed,
+                                   int max_len=60, int top_k=10, float temperature=0.8f,
+                                   float top_p=0.95f, float repetition_penalty=1.25f,
+                                   int pad_token_id=-1, int eos_token_id=-1) {
+    std::vector<int> output_tokens = seed;
+    std::vector<int> recent_tokens;
+
+    for (int t = 0; t < max_len; t++) {
+        CPUTensor x = embed.forward(output_tokens);
+        CPUTensor logits = model.forward(x);
+        if (logits.data.empty()) break;
+
+        int vocab_size = logits.cols;
+        std::vector<float> last_logits(logits.data.begin(), logits.data.begin() + vocab_size);
+
+        if (pad_token_id >= 0 && pad_token_id < vocab_size)
+            last_logits[pad_token_id] = -1e6f;
+
+        for (int token : recent_tokens)
+            if (token >= 0 && token < vocab_size)
+                last_logits[token] /= repetition_penalty;
+
+        int next_token = sample_topk_top_p_temperature(last_logits, top_k, top_p, temperature);
+
+        if(next_token < 0 || next_token >= vocab_size)
             next_token = 0;
 
         output_tokens.push_back(next_token);
+        recent_tokens.push_back(next_token);
+
+        if (recent_tokens.size() > 60) recent_tokens.erase(recent_tokens.begin());
+
+        if (next_token == eos_token_id) break;
     }
 
     return std::vector<int>(output_tokens.begin() + seed.size(), output_tokens.end());
@@ -102,9 +262,9 @@ int main(){
         std::cout << "가중치 로드 완료\n";
     }
 
-    float lr = 0.005f;
+    float lr = 0.0005f;
     int epochs = 50;
-    int seq_len = 8;
+    int seq_len = 16;
 
     std::cout << "--- Debug: Embedding & Linear Init ---\n";
     std::cout << "Embedding sample (W[0~4]): ";
@@ -169,7 +329,7 @@ int main(){
                 if(logits.data.empty()) continue;
 
                 std::vector<float> grad_logits;
-                cross_entropy_backward_cpu(logits.data, target_seq, grad_logits, logits.rows, logits.cols);
+                cross_entropy_backward_cpu(logits.data, target_seq, grad_logits, logits.rows, logits.cols, pad_token_id);
 
                 float step_loss = compute_step_loss(logits.data, target_seq, logits.rows, logits.cols, pad_token_id);
                 epoch_loss += step_loss;
@@ -209,7 +369,17 @@ int main(){
         std::vector<int> seed = tokenize(input);
         if(seed.empty()){ std::cout << "Bot: ...\n"; continue; }
 
-        std::vector<int> response_tokens = generate_response(seed, model, embed, 20, 10, 0.8f, pad_token_id);
+        std::vector<int> response_tokens = generate_response_context(
+            seed, model, embed,
+            50,      // max_len
+            15,      // top_k
+            0.74,   // temperature
+            0.92f,    // top_p
+            1.4f,    // repetition_penalty
+            pad_token_id,
+            -1,      // eos_token_id
+            false
+        );
 
         std::cout << "Bot: ";
         for(int idx: response_tokens){

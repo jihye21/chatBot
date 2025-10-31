@@ -31,18 +31,37 @@ int sample_topk_temperature(const std::vector<float>& logits, int k, float tempe
     return topk_idx.back();
 }
 
-void cross_entropy_backward_cpu(const std::vector<float>& logits,const std::vector<int>& targets,std::vector<float>& grad,int batch_size,int vocab_size){
-    grad.resize(batch_size*vocab_size);
-    for(int i=0;i<batch_size;i++){
-        float maxv=-1e9;
-        for(int j=0;j<vocab_size;j++) if(logits[i*vocab_size+j]>maxv) maxv=logits[i*vocab_size+j];
-        float sum=0;
-        for(int j=0;j<vocab_size;j++) sum+=exp(logits[i*vocab_size+j]-maxv);
-        for(int j=0;j<vocab_size;j++){
-            float prob=exp(logits[i*vocab_size+j]-maxv)/sum;
-            grad[i*vocab_size+j]=prob - (j==targets[i]?1.0f:0.0f);
+void cross_entropy_backward_cpu(const std::vector<float>& logits,
+                                const std::vector<int>& targets,
+                                std::vector<float>& grad,
+                                int rows, int cols,
+                                int pad_token_id = -1) {
+    grad.resize(logits.size(), 0.0f);
+
+    for (int i = 0; i < rows; i++) {
+        if (targets[i] == pad_token_id) continue;
+
+        float max_logit = -1e20f;
+        for (int j = 0; j < cols; j++)
+            if (logits[i*cols + j] > max_logit) max_logit = logits[i*cols + j];
+
+        float sum_exp = 0.0f;
+        for (int j = 0; j < cols; j++)
+            sum_exp += std::exp(logits[i*cols + j] - max_logit);
+
+        for (int j = 0; j < cols; j++) {
+            float p = std::exp(logits[i*cols + j] - max_logit) / (sum_exp + 1e-8f);
+            grad[i*cols + j] = p;
         }
+
+        grad[i*cols + targets[i]] -= 1.0f;
     }
+
+    int valid_count = 0;
+    for (int i = 0; i < rows; i++)
+        if (targets[i] != pad_token_id) valid_count++;
+    if (valid_count > 0)
+        for (auto &g : grad) g /= valid_count;
 }
 
 int sample_from_logits(const std::vector<float>& logits, float temperature=1.0f){
