@@ -10,7 +10,7 @@
 #include <cstdlib>
 #include <ctime>
 
-std::vector<int> generate_response(const std::vector<int>& seed, CPUMiniGPT &model, Embedding &embed, int max_len=10) {
+std::vector<int> generate_response(const std::vector<int>& seed, CPUMiniGPT &model, Embedding &embed, int max_len=20) {
     std::vector<int> output_tokens = seed;
 
     for(int t=0; t<max_len; t++){
@@ -41,10 +41,25 @@ int main(){
 
     load_all_corpus_from_folder("../corpus");
 
+    std::cout << "Total corpus size: " << corpus.size() << std::endl;
+
     // Build vocab & tokenize corpus
     build_vocab(corpus);
+    int pad_token_id = word2idx["<PAD> "];
+
     int vocab_size = (int)idx2word.size();
     std::cout << "Vocabulary size: " << vocab_size << std::endl;
+
+    std::vector<std::vector<int>> tokenized;
+    for(auto &s: corpus) tokenized.push_back(tokenize(s));
+
+    int min_len = 9999, max_len = 0;
+    for (auto &t : tokenized) {
+        int len = t.size();
+        if (len < min_len) min_len = len;
+        if (len > max_len) max_len = len;
+    }
+    std::cout << "Token length range: " << min_len << " ~ " << max_len << std::endl;
 
     CPUMiniGPT model(4,6,vocab_size);
     Embedding embed(vocab_size, 64);
@@ -57,28 +72,54 @@ int main(){
         std::cout << "가중치 로드 완료\n";
     }
 
-    std::vector<std::vector<int>> tokenized;
-    for(auto &s: corpus) tokenized.push_back(tokenize(s));
-
     float lr=0.005f;
     int epochs=50;
+    int seq_len = 3;
+
+    int steps = 0;
 
     // Training loop
     for(int epoch=0; epoch<epochs; epoch++){
-        
-        for(auto &tokens: tokenized){
+        steps = 0;
 
-            CPUTensor x = embed.forward(tokens);
-            CPUTensor logits = model.forward(x);
+        for(size_t sample_idx=0; sample_idx<tokenized.size(); sample_idx++){
+            auto &tokens = tokenized[sample_idx];
 
-            std::vector<float> grad_logits;
-            cross_entropy_backward_cpu(logits.data, tokens, grad_logits, logits.rows, logits.cols);
+            if (tokens.empty()) continue;
 
-            CPUTensor grad_tensor(logits.rows, logits.cols);
-            grad_tensor.data = grad_logits;
-            model.backward(grad_tensor, lr);
+            for(size_t start=0; start + seq_len <= tokens.size(); start++){
+                std::vector<int> input_seq(tokens.begin() + start, tokens.begin() + start + seq_len);
+                std::vector<int> target_seq(tokens.begin() + start + 1, tokens.begin() + start + seq_len + 1);
+                
+                while (input_seq.size() < seq_len) input_seq.push_back(pad_token_id);
+                while (target_seq.size() < seq_len) target_seq.push_back(pad_token_id);
+
+                bool valid = true;
+                for(auto idx: input_seq){
+                    if(idx < 0 || idx >= vocab_size){
+                        valid = false;
+                        break;
+                    }
+                }
+                if(!valid) continue;
+                
+                CPUTensor x = embed.forward(input_seq);
+                if (x.data.empty()) continue;
+
+                CPUTensor logits = model.forward(x);
+                if (logits.data.empty()) continue;
+
+                std::vector<float> grad_logits;
+                cross_entropy_backward_cpu(logits.data, target_seq, grad_logits, logits.rows, logits.cols);
+
+                CPUTensor grad_tensor(logits.rows, logits.cols);
+                grad_tensor.data = grad_logits;
+                model.backward(grad_tensor, lr);
+
+                steps++;
+            }
         }
-        std::cout << "Epoch " << epoch << " done\n";
+        std::cout << "Epoch " << epoch << " done, steps: " << steps << std::endl;
     }
 
     embed.save("embed.bin");
@@ -99,30 +140,11 @@ int main(){
         std::vector<int> seed = tokenize(input);
         if(seed.empty()){ std::cout << "Bot: ...\n"; continue; }
         
-        CPUTensor x = embed.forward(seed);
-        if(x.data.empty()) {
-            std::cout << "Bot: <UNK> x\n";
-            continue;
-        }
-        
-        CPUTensor logits = model.forward(x);
-        
-        if(logits.data.empty()) {
-            std::cout << "Bot: <UNK> logits\n";
-            continue;
-        }
-        
-        std::vector<int> output_tokens;
-        for(int t=0;t<10;t++){
-            int idx = sample_topk_temperature(logits.data, 10, 1.1f);
-            if(idx < 0 || idx >= (int)idx2word.size()) idx = 0;
-                output_tokens.push_back(idx);
-        }
-
-        std::vector<int> response_tokens = generate_response(seed, model, embed, 10);
+        std::vector<int> response_tokens = generate_response(seed, model, embed, 20);
 
         std::cout << "Bot: ";
-        for(int idx: output_tokens){
+        for(int idx: response_tokens){
+            if (idx == pad_token_id) continue;
             if(idx >= 0 && idx < (int)idx2word.size())
                 std::cout << idx2word[idx] << " ";
             else

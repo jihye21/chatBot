@@ -69,6 +69,9 @@ void build_vocab(const std::vector<std::string> &corpus){
     word2idx["<UNK>"] = idx++;
     idx2word.push_back("<UNK>");
 
+    word2idx["<PAD>"] = idx++;
+    idx2word.push_back("<PAD>");
+    
     for(auto &sentence: corpus){
         std::string clean;
         for(char c: sentence){
