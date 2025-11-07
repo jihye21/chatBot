@@ -6,3 +6,5 @@ mkdir build
 cd build
 cmake ..
 make
+./chatBot
+```

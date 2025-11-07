@@ -13,8 +13,8 @@ struct CPULinear {
     CPULinear(): W(0,0), b(0,0), in_dim(0), out_dim(0) {}
 
     CPULinear(int in_dim,int out_dim): W(in_dim,out_dim), b(1,out_dim), in_dim(in_dim), out_dim(out_dim){
-        float scale = 0.02f;
-        for(auto &v: W.data) v = ((float)rand()/RAND_MAX - 0.5f) * scale;
+        float limit = sqrt(6.0f / (in_dim + out_dim));
+        for(auto &v: W.data) v = ((float)rand()/RAND_MAX * 2 - 1) * limit;
         for(auto &v: b.data) v = 0.0f;
     }
 

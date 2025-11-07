@@ -35,9 +35,10 @@ float compute_step_loss(const std::vector<float>& logits, const std::vector<int>
     return loss;
 }
 
-void xavier_init(std::vector<float>& weights, int in_dim, int out_dim){
-    float bound = std::sqrt(6.0f / (in_dim + out_dim));
-    for(auto &v: weights) v = ((float)rand()/RAND_MAX*2 - 1) * bound;
+void xavier_init(std::vector<float>& weights, int in_dim, int out_dim, float scale = 0.5f){
+    float bound = scale * std::sqrt(6.0f / (in_dim + out_dim));
+    for(auto &v: weights) 
+        v = ((float)rand()/RAND_MAX*2 - 1) * bound;
 }
 
 int sample_from_top_p(const std::vector<float>& logits, float temperature, float top_p) {
@@ -133,11 +134,11 @@ std::vector<int> generate_response_context(
     const std::vector<int>& seed,
     CPUMiniGPT &model,
     Embedding &embed,
-    int max_len = 60,
-    int top_k = 15,
-    float temperature = 0.74f,
-    float top_p = 0.92f,
-    float repetition_penalty = 1.4f,
+    int max_len = 50,
+    int top_k = 20,
+    float temperature = 0.8f,
+    float top_p = 0.9f,
+    float repetition_penalty = 1.2f,
     int pad_token_id = -1,
     int eos_token_id = -1,
     bool debug = false
@@ -182,8 +183,8 @@ std::vector<int> generate_response_context(
 
 std::vector<int> generate_response(const std::vector<int>& seed,
                                    CPUMiniGPT &model, Embedding &embed,
-                                   int max_len=60, int top_k=10, float temperature=0.8f,
-                                   float top_p=0.95f, float repetition_penalty=1.25f,
+                                   int max_len=60, int top_k=10, float temperature=0.74f,
+                                   float top_p=0.9f, float repetition_penalty=1.0f,
                                    int pad_token_id=-1, int eos_token_id=-1) {
     std::vector<int> output_tokens = seed;
     std::vector<int> recent_tokens;
@@ -263,7 +264,7 @@ int main(){
     }
 
     float lr = 0.0005f;
-    int epochs = 50;
+    int epochs = 32;
     int seq_len = 16;
 
     std::cout << "--- Debug: Embedding & Linear Init ---\n";
@@ -372,10 +373,10 @@ int main(){
         std::vector<int> response_tokens = generate_response_context(
             seed, model, embed,
             50,      // max_len
-            15,      // top_k
-            0.74,   // temperature
-            0.92f,    // top_p
-            1.4f,    // repetition_penalty
+            30,      // top_k
+            1.0,   // temperature
+            0.9f,    // top_p
+            1.5f,    // repetition_penalty
             pad_token_id,
             -1,      // eos_token_id
             false

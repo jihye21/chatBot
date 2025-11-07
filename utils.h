@@ -41,7 +41,7 @@ void cross_entropy_backward_cpu(const std::vector<float>& logits,
     for (int i = 0; i < rows; i++) {
         if (targets[i] == pad_token_id) continue;
 
-        float max_logit = -1e20f;
+        float max_logit = logits[i*cols];
         for (int j = 0; j < cols; j++)
             if (logits[i*cols + j] > max_logit) max_logit = logits[i*cols + j];
 
@@ -57,11 +57,11 @@ void cross_entropy_backward_cpu(const std::vector<float>& logits,
         grad[i*cols + targets[i]] -= 1.0f;
     }
 
-    int valid_count = 0;
-    for (int i = 0; i < rows; i++)
-        if (targets[i] != pad_token_id) valid_count++;
-    if (valid_count > 0)
-        for (auto &g : grad) g /= valid_count;
+    int valid_count = 0; 
+    for (int i = 0; i < rows; i++) 
+    if (targets[i] != pad_token_id) valid_count++; 
+    float scale = valid_count > 0 ? 2.0f / valid_count : 1.0f;
+    for (auto &g : grad) g *= scale;
 }
 
 int sample_from_logits(const std::vector<float>& logits, float temperature=1.0f){
